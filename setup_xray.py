@@ -264,7 +264,7 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
 
 
 def write_hysteria_config(port: int, domain: str, password: str, obfs_password: str,
-                          masquerade: str, cert: pathlib.Path, key: pathlib.Path) -> None:
+                          cert: pathlib.Path, key: pathlib.Path) -> None:
     HYSTERIA_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     content = f"""listen: :{port}
 
@@ -282,10 +282,9 @@ obfs:
     password: {obfs_password}
 
 masquerade:
-  type: proxy
-  proxy:
-    url: https://{masquerade}/
-    rewriteHost: true
+  type: file
+  file:
+    dir: /var/www/hysteria-decoy
 """
     with tempfile.NamedTemporaryFile("w", dir=HYSTERIA_CONFIG.parent,
                                      prefix=".new-hysteria-", suffix=".yaml", delete=False) as file:
@@ -416,7 +415,6 @@ def make_hysteria_link(ip: str, port: int, domain: str,
 def install_hysteria(ip: str, port: int, domain: str, masquerade: str, replace: bool) -> None:
     progress(5, "Checking the domain and ports")
     check_domain(domain, ip)
-    check_site_tls(masquerade)
     resuming = HYSTERIA_PENDING.exists()
     if not replace and not resuming:
         check_udp_port(port)
@@ -431,7 +429,7 @@ def install_hysteria(ip: str, port: int, domain: str, masquerade: str, replace: 
     progress(90, "Writing the Hysteria 2 configuration")
     password = secrets.token_hex(12)
     obfs_password = secrets.token_hex(12)
-    write_hysteria_config(port, domain, password, obfs_password, masquerade, cert, key)
+    write_hysteria_config(port, domain, password, obfs_password, cert, key)
     configure_hysteria_certificate_access(cert, key)
     open_ufw_udp(port)
     run("systemctl", "enable", "hysteria-server.service", capture=True)
@@ -684,7 +682,6 @@ def main() -> None:
     say(f"Public IP: {ip}")
     if args.profile == "hysteria2":
         say(f"Selected Hysteria 2 domain: {args.site}")
-        say(f"Selected Hysteria 2 masquerade: {args.masquerade}")
         install_hysteria(ip, port, args.site, args.masquerade, args.replace)
         return
     if (XRAY.exists() or CONFIG.exists()) and not args.replace:

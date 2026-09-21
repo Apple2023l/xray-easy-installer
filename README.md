@@ -29,6 +29,8 @@ The desktop apps show live installation progress for Caddy and automatically
 resume an interrupted Hysteria installation managed by this installer.
 Hysteria runs under its own restricted system user. Renewable ACL permissions
 let it read only the Caddy certificate files required for TLS.
+Both Caddy and Hysteria serve the same local static decoy page, so the fallback
+does not depend on an external website remaining available.
 
 ## Applications
 

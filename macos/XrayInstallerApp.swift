@@ -504,19 +504,6 @@ struct ContentView: View {
                         .disabled(model.isRunning)
                     }
                 }
-                if selectedProfile == "hysteria2" {
-                    GridRow {
-                        Text(tr("masqueradeSite", language))
-                        Picker(tr("masqueradeSite", language), selection: $selectedSite) {
-                            ForEach(realitySites) { site in
-                                Text("\(site.name) · \(site.domain)").tag(site.domain)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .disabled(model.isRunning)
-                    }
-                }
             }
             .gridColumnAlignment(.leading)
 

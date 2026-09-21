@@ -207,7 +207,12 @@ internal sealed class InstallerForm : Form
         _site.SelectedIndex = 0;
         _domain.PlaceholderText = "vpn.example.com";
         _domain.Enabled = false;
-        _profile.SelectedIndexChanged += (_, _) => _domain.Enabled = !_running && _profile.SelectedIndex == 2;
+        _profile.SelectedIndexChanged += (_, _) =>
+        {
+            var hysteria = _profile.SelectedIndex == 2;
+            _domain.Enabled = !_running && hysteria;
+            _site.Enabled = !_running && !hysteria;
+        };
         _xhttpMode.Items.AddRange(["packet-up", "stream-up", "stream-one", "auto"]);
         _xhttpMode.SelectedIndex = 0;
         _resultLink.ReadOnly = true;
@@ -701,7 +706,7 @@ internal sealed class InstallerForm : Form
         _login.Enabled = !running;
         _password.Enabled = !running;
         _profile.Enabled = !running;
-        _site.Enabled = !running;
+        _site.Enabled = !running && _profile.SelectedIndex != 2;
         _domain.Enabled = !running && _profile.SelectedIndex == 2;
         _progress.Visible = running;
         if (running) _progress.Value = 2;
