@@ -1,0 +1,86 @@
+name: Build macOS and Windows installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "macos/**"
+      - "windows/**"
+      - "windows-dotnet/**"
+      - "setup_xray.py"
+      - ".github/workflows/build-installers.yml"
+  release:
+    types: [published]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore windows-dotnet/XrayInstaller.Windows.csproj
+
+      - name: Build Windows EXE
+        shell: pwsh
+        run: |
+          dotnet publish windows-dotnet/XrayInstaller.Windows.csproj -c Release -r win-x64 --self-contained true -o release --no-restore
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xray-Installer-Windows
+          path: release/Xray-Installer-Windows.exe
+          if-no-files-found: error
+
+      - name: Attach Windows installer to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/Xray-Installer-Windows.exe
+
+  macos:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build macOS application
+        run: bash macos/build.sh
+
+      - name: Sign and package macOS application
+        run: |
+          codesign --force --deep --sign - "dist/Xray Installer.app"
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "dist/Xray Installer.app" "release/Xray-Installer-macOS.zip"
+
+      - name: Verify macOS application
+        run: |
+          codesign --verify --deep --strict --verbose=2 "dist/Xray Installer.app"
+          unzip -t "release/Xray-Installer-macOS.zip"
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xray-Installer-macOS
+          path: release/Xray-Installer-macOS.zip
+          if-no-files-found: error
+
+      - name: Attach macOS installer to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/Xray-Installer-macOS.zip

@@ -1,0 +1,5 @@
+Xray-core logo (xray-logo.png)
+Source: https://commons.wikimedia.org/wiki/File:Xray-core_icon.png
+Author: XTLS
+License stated by source: Mozilla Public License 2.0
+https://www.mozilla.org/en-US/MPL/2.0/

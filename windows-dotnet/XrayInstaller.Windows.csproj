@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Xray-Installer-Windows</AssemblyName>
+    <RootNamespace>XrayInstaller.Windows</RootNamespace>
+    <ApplicationIcon>xray-installer.ico</ApplicationIcon>
+    <Version>1.5.0</Version>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <EmbeddedResource Include="..\setup_xray.py" Link="setup_xray.py" LogicalName="XrayInstaller.setup_xray.py" />
+  </ItemGroup>
+</Project>
