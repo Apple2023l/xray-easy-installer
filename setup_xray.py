@@ -171,7 +171,9 @@ def official_hysteria_install(replace: bool) -> None:
         if not (first_line.startswith(b"#!") and b"bash" in first_line):
             raise RuntimeError("The official Hysteria installer did not download correctly")
         environment = os.environ.copy()
-        environment.update({"HYSTERIA_USER": "root", "TERM": "dumb"})
+        # Keep the proxy isolated from both root and Caddy. The official installer
+        # creates this system user and writes matching systemd units.
+        environment.update({"HYSTERIA_USER": "hysteria", "TERM": "dumb"})
         if existing and replace:
             say("Removing the existing Hysteria 2 installation")
             result = subprocess.run(["bash", str(script), "--remove"], text=True,
@@ -197,14 +199,14 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
         apt("update")
         # Modern Ubuntu and Debian ship HTTPS transport in apt itself. Installing
         # the large Debian keyring packages is unnecessary and can stall on slow mirrors.
-        apt("install", "-y", "ca-certificates", "curl", "gnupg")
+        apt("install", "-y", "ca-certificates", "curl", "gnupg", "acl")
         keyring = pathlib.Path("/usr/share/keyrings/caddy-stable-archive-keyring.gpg")
         repository = pathlib.Path("/etc/apt/sources.list.d/caddy-stable.list")
         with tempfile.TemporaryDirectory(prefix="caddy-repository-") as directory:
             source_key = pathlib.Path(directory) / "gpg.key"
             request = urllib.request.Request(
                 "https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
-                headers={"User-Agent": "xray-easy-installer/1.6"},
+                headers={"User-Agent": "xray-easy-installer/1.6.2"},
             )
             with urllib.request.urlopen(request, timeout=30) as response:
                 source_key.write_bytes(response.read())
@@ -212,7 +214,7 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
             run("gpg", "--batch", "--yes", "--dearmor", "--output", str(keyring), str(source_key))
             request = urllib.request.Request(
                 "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt",
-                headers={"User-Agent": "xray-easy-installer/1.6"},
+                headers={"User-Agent": "xray-easy-installer/1.6.2"},
             )
             with urllib.request.urlopen(request, timeout=30) as response:
                 repository.write_bytes(response.read())
@@ -296,18 +298,53 @@ masquerade:
         temporary.unlink(missing_ok=True)
 
 
-def configure_hysteria_service_for_caddy() -> None:
-    """Run Hysteria as Caddy so it can read Caddy's renewed private key."""
-    caddy = pwd.getpwnam("caddy")
+def configure_hysteria_certificate_access(cert: pathlib.Path, key: pathlib.Path) -> None:
+    """Give the isolated Hysteria user renewable read access to Caddy's key."""
+    try:
+        hysteria = pwd.getpwnam("hysteria")
+    except KeyError:
+        # Supports resuming an installation started by an older app release.
+        run("useradd", "-r", "-d", "/var/lib/hysteria", "-m", "hysteria", capture=True)
+        hysteria = pwd.getpwnam("hysteria")
+    if shutil.which("setfacl") is None:
+        progress(88, "Installing certificate access tools")
+        apt("update")
+        apt("install", "-y", "acl")
+
     for unit_name in ("hysteria-server.service", "hysteria-server@.service"):
         unit = pathlib.Path("/etc/systemd/system") / unit_name
         if not unit.exists():
             raise RuntimeError(f"Missing Hysteria service unit: {unit}")
-        content = re.sub(r"^User=.*$", "User=caddy", unit.read_text(), flags=re.MULTILINE)
-        content = re.sub(r"^Group=.*$", "Group=caddy", content, flags=re.MULTILINE)
+        content = re.sub(r"^User=.*$", "User=hysteria", unit.read_text(), flags=re.MULTILINE)
+        content = re.sub(r"^Group=.*$", "Group=hysteria", content, flags=re.MULTILINE)
         unit.write_text(content)
-    os.chown(HYSTERIA_CONFIG, 0, caddy.pw_gid)
+
+    os.chown(HYSTERIA_CONFIG, 0, hysteria.pw_gid)
     HYSTERIA_CONFIG.chmod(0o640)
+
+    storage_root = pathlib.Path("/var/lib/caddy")
+    try:
+        relative_parent = cert.parent.relative_to(storage_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Unexpected Caddy certificate path: {cert}") from exc
+
+    current = storage_root
+    run("setfacl", "-m", "u:hysteria:--x", str(current), capture=True)
+    for part in relative_parent.parts[:-1]:
+        current /= part
+        run("setfacl", "-m", "u:hysteria:--x", str(current), capture=True)
+    certificate_directory = cert.parent
+    run("setfacl", "-m", "u:hysteria:r-x,d:u:hysteria:r-x",
+        str(certificate_directory), capture=True)
+    for certificate_file in (cert, key):
+        run("setfacl", "-m", "u:hysteria:r--", str(certificate_file), capture=True)
+
+    access_check = subprocess.run(
+        ["runuser", "-u", "hysteria", "--", "test", "-r", str(key)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if access_check.returncode:
+        raise RuntimeError("The Hysteria user cannot read Caddy's TLS private key")
     run("systemctl", "daemon-reload", capture=True)
 
 
@@ -395,7 +432,7 @@ def install_hysteria(ip: str, port: int, domain: str, masquerade: str, replace: 
     password = secrets.token_hex(12)
     obfs_password = secrets.token_hex(12)
     write_hysteria_config(port, domain, password, obfs_password, masquerade, cert, key)
-    configure_hysteria_service_for_caddy()
+    configure_hysteria_certificate_access(cert, key)
     open_ufw_udp(port)
     run("systemctl", "enable", "hysteria-server.service", capture=True)
     run("systemctl", "restart", "hysteria-server.service", capture=True)

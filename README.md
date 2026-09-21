@@ -27,6 +27,8 @@ free, and UDP port `40460` must be allowed by the VPS provider firewall. A
 proxied CDN record cannot be used because the domain must resolve to the VPS.
 The desktop apps show live installation progress for Caddy and automatically
 resume an interrupted Hysteria installation managed by this installer.
+Hysteria runs under its own restricted system user. Renewable ACL permissions
+let it read only the Caddy certificate files required for TLS.
 
 ## Applications
 
