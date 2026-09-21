@@ -126,6 +126,7 @@ final class InstallerModel: ObservableObject {
     @Published var link = ""
     @Published var isRunning = false
     @Published var status = "Введите данные нового сервера."
+    @Published var progressValue = 0.0
 
     func install(ip: String, login: String, password: String, site: String, masquerade: String,
                  profile: String, language: AppLanguage) {
@@ -161,6 +162,7 @@ final class InstallerModel: ObservableObject {
         }
 
         isRunning = true
+        progressValue = 2
         link = ""
         log = tr("connecting", language, ip)
         status = tr("installing", language)
@@ -206,7 +208,17 @@ final class InstallerModel: ObservableObject {
                     if chunk.isEmpty { break }
                     allOutput.append(chunk)
                     let text = String(decoding: chunk, as: UTF8.self)
-                    DispatchQueue.main.async { self.log.append(text) }
+                    let complete = String(decoding: allOutput, as: UTF8.self)
+                    let progressLine = complete.components(separatedBy: .newlines)
+                        .last(where: { $0.hasPrefix("::progress::") })
+                    let progressParts = progressLine?.components(separatedBy: "::")
+                    let percent = progressParts.flatMap { $0.count >= 4 ? Double($0[2]) : nil }
+                    let stage = progressParts.flatMap { $0.count >= 4 ? $0[3] : nil }
+                    DispatchQueue.main.async {
+                        self.log.append(text)
+                        if let percent { self.progressValue = percent }
+                        if let stage, !stage.isEmpty { self.status = "\(stage) · \(Int(percent ?? 0))%" }
+                    }
                 }
                 process.waitUntilExit()
                 let completeText = String(decoding: allOutput, as: UTF8.self)
@@ -218,6 +230,7 @@ final class InstallerModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.isRunning = false
                     if process.terminationStatus == 0, let resultLink {
+                        self.progressValue = 100
                         self.link = resultLink
                         self.status = tr("done", language)
                     } else {
@@ -518,7 +531,13 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isRunning)
 
-                if model.isRunning { ProgressView().controlSize(.small) }
+                if model.isRunning {
+                    ProgressView(value: model.progressValue, total: 100)
+                        .frame(width: 170)
+                    Text("\(Int(model.progressValue))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
                 Text(model.status)
                     .foregroundStyle(model.link.isEmpty ? Color(nsColor: .secondaryLabelColor) : Color.green)
                     .lineLimit(2)

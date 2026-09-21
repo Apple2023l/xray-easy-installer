@@ -25,6 +25,8 @@ built-in masquerade proxies a site selected in the app. Before installation,
 point an IPv4 DNS record directly to the VPS. TCP ports `80` and `443` must be
 free, and UDP port `40460` must be allowed by the VPS provider firewall. A
 proxied CDN record cannot be used because the domain must resolve to the VPS.
+The desktop apps show live installation progress for Caddy and automatically
+resume an interrupted Hysteria installation managed by this installer.
 
 ## Applications
 

@@ -54,7 +54,7 @@ internal sealed class InstallerForm : Form
     private readonly TextBox _domain = Input();
     private readonly Button _installButton = PrimaryButton("Подключиться и установить");
     private readonly Label _status = LabelText("Введите данные нового сервера.", Secondary);
-    private readonly ProgressBar _progress = new() { Style = ProgressBarStyle.Marquee, Visible = false, Width = 150 };
+    private readonly ProgressBar _progress = new() { Style = ProgressBarStyle.Continuous, Minimum = 0, Maximum = 100, Visible = false, Width = 180 };
     private readonly RichTextBox _log = OutputBox();
     private readonly TextBox _resultLink = Input();
 
@@ -437,15 +437,13 @@ internal sealed class InstallerForm : Form
         try
         {
             var result = await Task.Run(() => InstallServer(ip, login, password, site, masquerade, profile,
-                T("missing_script"), T("remote_channel"), T("no_server_link")));
-            _log.AppendText(result.Log);
-            _log.SelectionStart = _log.TextLength;
-            _log.ScrollToCaret();
+                T("missing_script"), T("remote_channel"), T("no_server_link"), HandleRemoteOutput));
             _resultLink.Text = result.Link;
             _podkopLink.Text = result.Link;
             _shadowLink.Text = result.Link;
             _status.ForeColor = Success;
             _status.Text = T("done");
+            _progress.Value = 100;
             GeneratePodkop();
             RefreshQr(false);
         }
@@ -464,7 +462,7 @@ internal sealed class InstallerForm : Form
 
     private static (string Link, string Log) InstallServer(
         string ip, string login, string password, string site, string masquerade, string profile,
-        string missingScript, string remoteError, string noServerLink)
+        string missingScript, string remoteError, string noServerLink, Action<string> onOutput)
     {
         var auth = new PasswordAuthenticationMethod(login, password);
         var connection = new ConnectionInfo(ip, 22, login, auth)
@@ -491,9 +489,25 @@ internal sealed class InstallerForm : Form
                 $"python3 {ShellQuote(remote)} --ip {ShellQuote(ip)} --site {ShellQuote(site)} " +
                 $"--masquerade {ShellQuote(masquerade)} --profile {ShellQuote(profile)}");
             command.CommandTimeout = TimeSpan.FromMinutes(25);
-            var stdout = command.Execute() ?? string.Empty;
-            var stderr = command.Error ?? string.Empty;
-            var log = stderr + stdout;
+            var output = new StringBuilder();
+            var outputLock = new object();
+            void AddLine(string line)
+            {
+                lock (outputLock) output.AppendLine(line);
+                onOutput(line + Environment.NewLine);
+            }
+            static void Pump(Stream stream, Action<string> addLine)
+            {
+                using var reader = new StreamReader(stream, Encoding.UTF8, true, 4096, leaveOpen: true);
+                while (reader.ReadLine() is { } line) addLine(line);
+            }
+            var execution = command.BeginExecute();
+            var stdoutTask = Task.Run(() => Pump(command.OutputStream, AddLine));
+            var stderrTask = Task.Run(() => Pump(command.ExtendedOutputStream, AddLine));
+            command.EndExecute(execution);
+            Task.WaitAll(stdoutTask, stderrTask);
+            string log;
+            lock (outputLock) log = output.ToString();
             if (command.ExitStatus != 0)
                 throw new InvalidOperationException(log.Trim().Length > 0 ? log.Trim() : remoteError);
             var link = log.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -511,6 +525,23 @@ internal sealed class InstallerForm : Form
             sftp.Disconnect();
             ssh.Disconnect();
         }
+    }
+
+    private void HandleRemoteOutput(string text)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => HandleRemoteOutput(text));
+            return;
+        }
+        _log.AppendText(text);
+        _log.SelectionStart = _log.TextLength;
+        _log.ScrollToCaret();
+        var match = System.Text.RegularExpressions.Regex.Match(
+            text, @"::progress::(?<percent>\d{1,3})::(?<stage>[^\r\n]+)");
+        if (!match.Success || !int.TryParse(match.Groups["percent"].Value, out var percent)) return;
+        _progress.Value = Math.Clamp(percent, 0, 100);
+        _status.Text = $"{match.Groups["stage"].Value} · {_progress.Value}%";
     }
 
     private void GeneratePodkop()
@@ -673,6 +704,7 @@ internal sealed class InstallerForm : Form
         _site.Enabled = !running;
         _domain.Enabled = !running && _profile.SelectedIndex == 2;
         _progress.Visible = running;
+        if (running) _progress.Value = 2;
         _status.ForeColor = Secondary;
         if (running) _status.Text = T("installing");
     }

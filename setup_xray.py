@@ -39,6 +39,8 @@ LINK_FILE = pathlib.Path("/root/xray-link.txt")
 HYSTERIA = pathlib.Path("/usr/local/bin/hysteria")
 HYSTERIA_CONFIG = pathlib.Path("/etc/hysteria/config.yaml")
 HYSTERIA_LINK_FILE = pathlib.Path("/root/hysteria2-link.txt")
+HYSTERIA_PENDING = pathlib.Path("/etc/hysteria/.xray-easy-installer-pending")
+HYSTERIA_MANAGED = pathlib.Path("/etc/hysteria/.xray-easy-installer")
 DEFAULT_SITE = "www.xbox.com"
 DEFAULT_PORT = 8435
 DEFAULT_HYSTERIA_PORT = 40460
@@ -47,6 +49,11 @@ PROFILES = ("xhttp", "vision", "hysteria2")
 
 def say(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def progress(percent: int, message: str) -> None:
+    """Emit a machine-readable progress line that is also useful in logs."""
+    say(f"::progress::{percent}::{message}")
 
 
 def run(*args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -59,6 +66,21 @@ def run(*args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
     if result.returncode:
         detail = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
         raise RuntimeError(f"Command failed: {args[0]}\n{detail[-1600:]}")
+    return result
+
+
+def apt(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run apt with bounded downloads and visible output for remote installers."""
+    environment = os.environ.copy()
+    environment.update({"DEBIAN_FRONTEND": "noninteractive", "TERM": "dumb"})
+    command = [
+        "apt-get", "-o", "Acquire::Retries=3", "-o", "Acquire::http::Timeout=30",
+        "-o", "Acquire::https::Timeout=30", *args,
+    ]
+    result = subprocess.run(command, text=True, stdout=sys.stderr, stderr=sys.stderr,
+                            env=environment)
+    if result.returncode:
+        raise RuntimeError(f"Package installation failed (exit {result.returncode})")
     return result
 
 
@@ -78,8 +100,8 @@ def install_dependencies() -> None:
         if shutil.which("apt-get") is None:
             raise RuntimeError(f"Missing {', '.join(missing)} and apt-get is unavailable")
         say("Installing dependencies: " + ", ".join(missing))
-        run("apt-get", "update", "-qq")
-        run("apt-get", "install", "-y", "-qq", "ca-certificates", *missing)
+        apt("update")
+        apt("install", "-y", "ca-certificates", *missing)
 
 
 def official_install(replace: bool) -> None:
@@ -132,8 +154,12 @@ def check_domain(domain: str, ip: str) -> None:
 
 def official_hysteria_install(replace: bool) -> None:
     existing = HYSTERIA.exists() or HYSTERIA_CONFIG.exists()
-    if existing and not replace:
+    resuming = existing and HYSTERIA_PENDING.exists()
+    if existing and not replace and not resuming:
         raise RuntimeError("Hysteria 2 already exists. Use --replace to reinstall it.")
+    if resuming and HYSTERIA.exists():
+        progress(25, "Resuming the existing Hysteria 2 installation")
+        return
     install_dependencies()
     with tempfile.TemporaryDirectory(prefix="hysteria-installer-") as directory:
         script = pathlib.Path(directory) / "install.sh"
@@ -145,14 +171,14 @@ def official_hysteria_install(replace: bool) -> None:
         if not (first_line.startswith(b"#!") and b"bash" in first_line):
             raise RuntimeError("The official Hysteria installer did not download correctly")
         environment = os.environ.copy()
-        environment["HYSTERIA_USER"] = "root"
-        if existing:
+        environment.update({"HYSTERIA_USER": "root", "TERM": "dumb"})
+        if existing and replace:
             say("Removing the existing Hysteria 2 installation")
             result = subprocess.run(["bash", str(script), "--remove"], text=True,
                                     stdout=sys.stderr, stderr=sys.stderr, env=environment)
             if result.returncode:
                 raise RuntimeError("Could not remove the existing Hysteria 2 installation")
-        say("Installing the latest stable Hysteria 2 with the official installer")
+        progress(25, "Installing Hysteria 2")
         result = subprocess.run(["bash", str(script)], text=True,
                                 stdout=sys.stderr, stderr=sys.stderr, env=environment)
         if result.returncode:
@@ -167,10 +193,11 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
     if shutil.which("apt-get") is None:
         raise RuntimeError("Caddy automatic setup requires Ubuntu or Debian with apt-get")
     if shutil.which("caddy") is None:
-        say("Installing Caddy from the official repository")
-        run("apt-get", "update", "-qq")
-        run("apt-get", "install", "-y", "-qq", "debian-keyring", "debian-archive-keyring",
-            "apt-transport-https", "curl", "gnupg")
+        progress(35, "Preparing Caddy packages")
+        apt("update")
+        # Modern Ubuntu and Debian ship HTTPS transport in apt itself. Installing
+        # the large Debian keyring packages is unnecessary and can stall on slow mirrors.
+        apt("install", "-y", "ca-certificates", "curl", "gnupg")
         keyring = pathlib.Path("/usr/share/keyrings/caddy-stable-archive-keyring.gpg")
         repository = pathlib.Path("/etc/apt/sources.list.d/caddy-stable.list")
         with tempfile.TemporaryDirectory(prefix="caddy-repository-") as directory:
@@ -181,6 +208,7 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
             )
             with urllib.request.urlopen(request, timeout=30) as response:
                 source_key.write_bytes(response.read())
+            progress(45, "Adding the official Caddy repository")
             run("gpg", "--batch", "--yes", "--dearmor", "--output", str(keyring), str(source_key))
             request = urllib.request.Request(
                 "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt",
@@ -190,8 +218,13 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
                 repository.write_bytes(response.read())
         keyring.chmod(0o644)
         repository.chmod(0o644)
-        run("apt-get", "update", "-qq")
-        run("apt-get", "install", "-y", "-qq", "caddy")
+        progress(55, "Refreshing the Caddy package list")
+        apt("update")
+        progress(65, "Installing Caddy")
+        apt("install", "-y", "caddy")
+    else:
+        progress(65, "Caddy is already installed")
+    progress(72, "Creating the HTTPS decoy website")
     web_root = pathlib.Path("/var/www/hysteria-decoy")
     web_root.mkdir(parents=True, exist_ok=True)
     (web_root / "index.html").write_text("""<!doctype html>
@@ -211,6 +244,7 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
     open_ufw(443)
     run("systemctl", "enable", "caddy", capture=True)
     run("systemctl", "restart", "caddy", capture=True)
+    progress(78, "Waiting for the TLS certificate")
     deadline = time.monotonic() + 90
     storage = pathlib.Path("/var/lib/caddy/.local/share/caddy/certificates")
     while time.monotonic() < deadline:
@@ -219,6 +253,7 @@ def install_caddy_decoy(domain: str, replace: bool) -> tuple[pathlib.Path, pathl
             key = cert.with_suffix(".key")
             if cert.stat().st_size > 0 and key.exists() and key.stat().st_size > 0:
                 say(f"Caddy HTTPS decoy is ready: https://{domain}/")
+                progress(85, "Caddy HTTPS is ready")
                 return cert, key
         time.sleep(2)
     logs = subprocess.run(["journalctl", "--no-pager", "-n", "100", "-u", "caddy"],
@@ -259,6 +294,21 @@ masquerade:
         os.replace(temporary, HYSTERIA_CONFIG)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def configure_hysteria_service_for_caddy() -> None:
+    """Run Hysteria as Caddy so it can read Caddy's renewed private key."""
+    caddy = pwd.getpwnam("caddy")
+    for unit_name in ("hysteria-server.service", "hysteria-server@.service"):
+        unit = pathlib.Path("/etc/systemd/system") / unit_name
+        if not unit.exists():
+            raise RuntimeError(f"Missing Hysteria service unit: {unit}")
+        content = re.sub(r"^User=.*$", "User=caddy", unit.read_text(), flags=re.MULTILINE)
+        content = re.sub(r"^Group=.*$", "Group=caddy", content, flags=re.MULTILINE)
+        unit.write_text(content)
+    os.chown(HYSTERIA_CONFIG, 0, caddy.pw_gid)
+    HYSTERIA_CONFIG.chmod(0o640)
+    run("systemctl", "daemon-reload", capture=True)
 
 
 def open_ufw_udp(port: int) -> None:
@@ -327,19 +377,25 @@ def make_hysteria_link(ip: str, port: int, domain: str,
 
 
 def install_hysteria(ip: str, port: int, domain: str, masquerade: str, replace: bool) -> None:
+    progress(5, "Checking the domain and ports")
     check_domain(domain, ip)
     check_site_tls(masquerade)
-    if not replace:
+    resuming = HYSTERIA_PENDING.exists()
+    if not replace and not resuming:
         check_udp_port(port)
         check_port(80)
         check_port(443)
+    HYSTERIA_PENDING.parent.mkdir(parents=True, exist_ok=True)
+    HYSTERIA_PENDING.write_text("Installation in progress\n")
     official_hysteria_install(replace)
     if replace:
         check_udp_port(port)
     cert, key = install_caddy_decoy(domain, replace)
+    progress(90, "Writing the Hysteria 2 configuration")
     password = secrets.token_hex(12)
     obfs_password = secrets.token_hex(12)
     write_hysteria_config(port, domain, password, obfs_password, masquerade, cert, key)
+    configure_hysteria_service_for_caddy()
     open_ufw_udp(port)
     run("systemctl", "enable", "hysteria-server.service", capture=True)
     run("systemctl", "restart", "hysteria-server.service", capture=True)
@@ -348,7 +404,7 @@ def install_hysteria(ip: str, port: int, domain: str, masquerade: str, replace: 
         logs = subprocess.run(["journalctl", "--no-pager", "-n", "80", "-u",
                                "hysteria-server.service"], capture_output=True, text=True).stdout
         raise RuntimeError("Hysteria 2 service is not active:\n" + logs[-2000:])
-    say("Testing a Hysteria 2 connection")
+    progress(96, "Testing the Hysteria 2 connection")
     test_hysteria_connection("127.0.0.1", port, domain, password, obfs_password)
     link = make_hysteria_link(ip, port, domain, password, obfs_password)
     with tempfile.NamedTemporaryFile("w", dir=HYSTERIA_LINK_FILE.parent,
@@ -357,7 +413,10 @@ def install_hysteria(ip: str, port: int, domain: str, masquerade: str, replace: 
         temporary = pathlib.Path(file.name)
     temporary.chmod(0o600)
     os.replace(temporary, HYSTERIA_LINK_FILE)
+    HYSTERIA_MANAGED.write_text("Managed by Xray Easy Installer\n")
+    HYSTERIA_PENDING.unlink(missing_ok=True)
     print(link, flush=True)
+    progress(100, "Installation completed")
     say(f"Verified. A root-only copy is saved at {HYSTERIA_LINK_FILE}")
 
 def check_site_tls(site: str) -> None:
