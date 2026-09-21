@@ -1,7 +1,7 @@
 # Xray Easy Installer
 
-Desktop installer for deploying a fresh Xray server over SSH without editing
-JSON files or using the command line.
+Desktop installer for deploying Xray or Hysteria 2 over SSH without editing
+configuration files or using the command line.
 
 The macOS and Windows interfaces can be switched between Russian, English,
 Persian (with right-to-left layout), and Simplified Chinese.
@@ -10,11 +10,21 @@ Persian (with right-to-left layout), and Simplified Chinese.
 
 - VLESS + XHTTP + REALITY
 - VLESS + RAW/TCP + REALITY + Vision
+- Hysteria 2 + Salamander with a Caddy HTTPS decoy website
 
-Both profiles use port `8435` by default. The installer downloads the latest
+The VLESS profiles use TCP port `8435`; Hysteria 2 uses UDP port `40460`.
+The installer downloads the latest
 stable Xray release through the official XTLS installer, generates new
 credentials, validates the server configuration and performs a local proxy
 connection test before returning the profile.
+
+Hysteria 2 uses the official installer from `get.hy2.sh`. Caddy is installed
+from its official repository, obtains and renews the TLS certificate, and serves
+a neutral HTTPS page on the domain. Hysteria uses the same certificate and its
+built-in masquerade proxies a site selected in the app. Before installation,
+point an IPv4 DNS record directly to the VPS. TCP ports `80` and `443` must be
+free, and UDP port `40460` must be allowed by the VPS provider firewall. A
+proxied CDN record cannot be used because the domain must resolve to the VPS.
 
 ## Applications
 
@@ -38,7 +48,7 @@ Xray-Installer-Windows.exe
 
 ## Generated output
 
-- VLESS import link
+- VLESS or Hysteria 2 import link
 - QR code for Shadowrocket and compatible clients
 - sing-box outbound JSON for Podkop
 
@@ -47,13 +57,14 @@ Xray-Installer-Windows.exe
 - Ubuntu or Debian with systemd
 - Public IPv4 address
 - Root SSH access
-- TCP port 8435 available
+- TCP port 8435 available for VLESS
+- A domain, free TCP ports 80 and 443, plus UDP port 40460 for Hysteria 2
 
 ## Security
 
 SSH passwords are used only during the active installation and are not written
-to disk. The generated server link is saved on the VPS as
-`/root/xray-link.txt` with root-only permissions.
+to disk. The generated server link is saved on the VPS as `/root/xray-link.txt`
+or `/root/hysteria2-link.txt` with root-only permissions.
 
 ## Third-party software
 
